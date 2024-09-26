@@ -66,7 +66,7 @@ def transforms_imagenet_train(
         img_size: Union[int, Tuple[int, int]] = 224,
         scale: Optional[Tuple[float, float]] = None,
         ratio: Optional[Tuple[float, float]] = None,
-        train_crop_mode: Optional[TrainCropMode] = None,
+        train_crop_mode: TrainCropMode = TrainCropMode.RESIZE_RANDOM_CROP,
         hflip: float = 0.5,
         vflip: float = 0.,
         color_jitter: Union[float, Tuple[float, ...]] = 0.4,
@@ -86,7 +86,7 @@ def transforms_imagenet_train(
         normalize: bool = True,
         separate: bool = False,
         resize_longest: int = 0,
-        padding_mode: str = 'reflect'
+        padding_mode: PaddingMode = PaddingMode.REFLECT
 ):
     """ ImageNet-oriented image transforms for training.
 
@@ -122,7 +122,6 @@ def transforms_imagenet_train(
          * a portion of the data through the secondary transform
          * normalizes and converts the branches above with the third, final transform
     """
-    train_crop_mode = train_crop_mode or TrainCropMode.RESIZE_RANDOM_CROP
     assert isinstance(train_crop_mode, TrainCropMode)
 
     if train_crop_mode in (TrainCropMode.RESIZE_KEEP_RATIO_CENTER,
@@ -252,8 +251,8 @@ def transforms_imagenet_train(
 
 def transforms_imagenet_eval(
         img_size: Union[int, Tuple[int, int]] = 224,
-        crop_pct: Optional[float] = None,
-        crop_mode: Optional[InferenceCropMode] = None,
+        crop_pct: float = DEFAULT_CROP_PCT,
+        crop_mode: InferenceCropMode = InferenceCropMode.CENTER,
         crop_border_pixels: Optional[int] = None,
         padding_mode: PaddingMode = PaddingMode.CONSTANT,
         interpolation: str = 'bilinear',
@@ -279,8 +278,7 @@ def transforms_imagenet_eval(
     Returns:
         Composed transform pipeline
     """
-    crop_pct = crop_pct or DEFAULT_CROP_PCT
-    assert isinstance(crop_pct, InferenceCropMode) and isinstance(padding_mode, PaddingMode)
+    assert isinstance(crop_mode, InferenceCropMode) and isinstance(padding_mode, PaddingMode)
 
     if isinstance(img_size, (tuple, list)):
         assert len(img_size) == 2
@@ -306,7 +304,7 @@ def transforms_imagenet_eval(
         # no image lost if crop_pct == 1.0
 
         # FIXME: do something with fill
-        fill = 0 #[round(255 * v) for v in mean]
+        fill = 0  # [round(255 * v) for v in mean]
         tfl += [
             ResizeKeepRatio(scale_size, interpolation=interpolation, longest=1.0),
             CenterCropOrPad(img_size, fill=fill, padding_mode=padding_mode),
@@ -346,7 +344,7 @@ def create_transform(
         input_size: Union[int, Tuple[int, int], Tuple[int, int, int]] = 224,
         is_training: bool = False,
         no_aug: bool = False,
-        train_crop_mode: Optional[TrainCropMode] = None,
+        train_crop_mode: TrainCropMode = TrainCropMode.RESIZE_RANDOM_CROP,
         scale: Optional[Tuple[float, float]] = None,
         ratio: Optional[Tuple[float, float]] = None,
         hflip: float = 0.5,
@@ -364,14 +362,14 @@ def create_transform(
         re_count: int = 1,
         re_num_splits: int = 0,
         crop_pct: Optional[float] = None,
-        crop_mode: Optional[InferenceCropMode] = None,
+        crop_mode: InferenceCropMode = InferenceCropMode.CENTER,
+        padding_mode: PaddingMode = PaddingMode.CONSTANT,
         crop_border_pixels: Optional[int] = None,
         tf_preprocessing: bool = False,
         use_prefetcher: bool = False,
         normalize: bool = True,
         separate: bool = False,
-        resize_longest: int = 0,
-        padding_mode: str = 'reflect'
+        resize_longest: int = 0
 ):
     """
 
