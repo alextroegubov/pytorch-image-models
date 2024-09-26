@@ -22,6 +22,7 @@ from .distributed_sampler import OrderedDistributedSampler, RepeatAugSampler
 from .random_erasing import RandomErasing
 from .mixup import FastCollateMixup
 from .transforms_factory import create_transform
+from .transforms import PaddingMode, TrainCropMode, InferenceCropMode
 
 _logger = logging.getLogger(__name__)
 
@@ -203,7 +204,7 @@ def create_loader(
         re_mode: str = 'const',
         re_count: int = 1,
         re_split: bool = False,
-        train_crop_mode: Optional[str] = None,
+        train_crop_mode: TrainCropMode = TrainCropMode.RESIZE_RANDOM_CROP,
         scale: Optional[Tuple[float, float]] = None,
         ratio: Optional[Tuple[float, float]] = None,
         hflip: float = 0.5,
@@ -221,7 +222,7 @@ def create_loader(
         num_workers: int = 1,
         distributed: bool = False,
         crop_pct: Optional[float] = None,
-        crop_mode: Optional[str] = None,
+        crop_mode: InferenceCropMode = InferenceCropMode.CENTER,
         crop_border_pixels: Optional[int] = None,
         collate_fn: Optional[Callable] = None,
         pin_memory: bool = False,
@@ -233,6 +234,8 @@ def create_loader(
         persistent_workers: bool = True,
         worker_seeding: str = 'all',
         tf_preprocessing: bool = False,
+        resize_longest: int = 0,
+        padding_mode: PaddingMode = PaddingMode.CONSTANT
 ):
     """
 
@@ -311,6 +314,8 @@ def create_loader(
         tf_preprocessing=tf_preprocessing,
         use_prefetcher=use_prefetcher,
         separate=num_aug_splits > 0,
+        resize_longest=resize_longest,
+        padding_mode=padding_mode
     )
 
     if isinstance(dataset, IterableImageDataset):
