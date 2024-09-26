@@ -12,7 +12,8 @@ from torchvision import transforms
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, DEFAULT_CROP_PCT
 from timm.data.auto_augment import rand_augment_transform, augment_and_mix_transform, auto_augment_transform
 from timm.data.transforms import str_to_interp_mode, str_to_pil_interp, RandomResizedCropAndInterpolation, \
-    ResizeKeepRatio, CenterCropOrPad, RandomCropOrPad, TrimBorder, ToNumpy, MaybeToTensor, MaybePILToTensor
+    ResizeKeepRatio, CenterCropOrPad, RandomCropOrPad, TrimBorder, ToNumpy, MaybeToTensor, MaybePILToTensor, \
+    TrainCropMode
 from timm.data.random_erasing import RandomErasing
 
 
@@ -65,7 +66,7 @@ def transforms_imagenet_train(
         img_size: Union[int, Tuple[int, int]] = 224,
         scale: Optional[Tuple[float, float]] = None,
         ratio: Optional[Tuple[float, float]] = None,
-        train_crop_mode: Optional[str] = None,
+        train_crop_mode: Optional[TrainCropMode] = None,
         hflip: float = 0.5,
         vflip: float = 0.,
         color_jitter: Union[float, Tuple[float, ...]] = 0.4,
@@ -84,12 +85,14 @@ def transforms_imagenet_train(
         use_prefetcher: bool = False,
         normalize: bool = True,
         separate: bool = False,
+        resize_longest: int = 0,
+        padding_mode: str = 'reflect'
 ):
     """ ImageNet-oriented image transforms for training.
 
     Args:
         img_size: Target image size.
-        train_crop_mode: Training random crop mode ('rrc', 'rkrc', 'rkrr').
+        train_crop_mode: resize random crop, resize keep ratio center, resize keep ratio random
         scale: Random resize scale range (crop area, < 1.0 => zoom in).
         ratio: Random aspect ratio range (crop ratio for RRC, ratio adjustment factor for RKR).
         hflip: Horizontal flip probability.
@@ -119,15 +122,18 @@ def transforms_imagenet_train(
          * a portion of the data through the secondary transform
          * normalizes and converts the branches above with the third, final transform
     """
-    train_crop_mode = train_crop_mode or 'rrc'
-    assert train_crop_mode in {'rrc', 'rkrc', 'rkrr'}
-    if train_crop_mode in ('rkrc', 'rkrr'):
+    train_crop_mode = train_crop_mode or TrainCropMode.RESIZE_RANDOM_CROP
+    assert isinstance(train_crop_mode, TrainCropMode)
+
+    if train_crop_mode in (TrainCropMode.RESIZE_KEEP_RATIO_CENTER,
+                           TrainCropMode.RESIZE_KEEP_RATIO_RANDOM):
         # FIXME integration of RKR is a WIP
         scale = tuple(scale or (0.8, 1.00))
         ratio = tuple(ratio or (0.9, 1/.9))
         primary_tfl = [
             ResizeKeepRatio(
                 img_size,
+                longest=resize_longest,
                 interpolation=interpolation,
                 random_scale_prob=0.5,
                 random_scale_range=scale,
@@ -135,9 +141,9 @@ def transforms_imagenet_train(
                 random_aspect_prob=0.5,
                 random_aspect_range=ratio,
             ),
-            CenterCropOrPad(img_size, padding_mode='reflect')
-            if train_crop_mode == 'rkrc' else
-            RandomCropOrPad(img_size, padding_mode='reflect')
+            CenterCropOrPad(img_size, padding_mode=padding_mode)
+            if train_crop_mode == TrainCropMode.RESIZE_KEEP_RATIO_CENTER else
+            RandomCropOrPad(img_size, padding_mode=padding_mode)
         ]
     else:
         scale = tuple(scale or (0.08, 1.0))  # default imagenet scale range
@@ -335,7 +341,7 @@ def create_transform(
         input_size: Union[int, Tuple[int, int], Tuple[int, int, int]] = 224,
         is_training: bool = False,
         no_aug: bool = False,
-        train_crop_mode: Optional[str] = None,
+        train_crop_mode: Optional[TrainCropMode] = None,
         scale: Optional[Tuple[float, float]] = None,
         ratio: Optional[Tuple[float, float]] = None,
         hflip: float = 0.5,
@@ -359,6 +365,8 @@ def create_transform(
         use_prefetcher: bool = False,
         normalize: bool = True,
         separate: bool = False,
+        resize_longest: int = 0,
+        padding_mode: str = 'reflect'
 ):
     """
 
@@ -366,7 +374,7 @@ def create_transform(
         input_size: Target input size (channels, height, width) tuple or size scalar.
         is_training: Return training (random) transforms.
         no_aug: Disable augmentation for training (useful for debug).
-        train_crop_mode: Training random crop mode ('rrc', 'rkrc', 'rkrr').
+        train_crop_mode: Training random crop mode.
         scale: Random resize scale range (crop area, < 1.0 => zoom in).
         ratio: Random aspect ratio range (crop ratio for RRC, ratio adjustment factor for RKR).
         hflip: Horizontal flip probability.
@@ -442,6 +450,8 @@ def create_transform(
                 use_prefetcher=use_prefetcher,
                 normalize=normalize,
                 separate=separate,
+                resize_longest=resize_longest,
+                padding_mode=padding_mode
             )
         else:
             assert not separate, "Separate transforms not supported for validation preprocessing"

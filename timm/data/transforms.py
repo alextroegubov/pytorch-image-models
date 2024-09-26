@@ -3,6 +3,7 @@ import numbers
 import random
 import warnings
 from typing import List, Sequence, Tuple, Union
+from enum import Enum
 
 import torch
 import torchvision.transforms as transforms
@@ -20,6 +21,21 @@ __all__ = [
     "RandomResizedCropAndInterpolation", "CenterCropOrPad", "center_crop_or_pad", "crop_or_pad",
     "RandomCropOrPad", "RandomPad", "ResizeKeepRatio", "TrimBorder", "MaybeToTensor", "MaybePILToTensor"
 ]
+
+
+class TrainCropMode(Enum):
+    """
+    values:
+        RRC: crop image with random size and random aspect ratio, 
+            then resize the crop to target size
+        RKRC: resize (on longest or shortest side) keeping aspect ratio, 
+            then center crop or padding
+        RKRR: resize (on longest or shortest side) keeping aspect ratio,
+            then random crop or padding
+    """
+    RESIZE_RANDOM_CROP = 1
+    RESIZE_KEEP_RATIO_CENTER = 2
+    RESIZE_KEEP_RATIO_RANDOM = 3
 
 
 class ToNumpy:
