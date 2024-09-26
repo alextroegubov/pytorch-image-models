@@ -23,6 +23,46 @@ __all__ = [
 ]
 
 
+class PaddingMode(Enum):
+    """
+    values:
+        constant:
+        reflect:
+        symmetric:
+        edge:
+    """
+
+    CONSTANT = 1
+    REFLECT = 2
+    SYMMETRIC = 3
+    EDGE = 4
+
+    @staticmethod
+    def mode2str(mode):
+        mapping = {
+            PaddingMode.CONSTANT: 'constant',
+            PaddingMode.REFLECT: 'reflect',
+            PaddingMode.SYMMETRIC: 'symmetric',
+            PaddingMode.EDGE: 'edge'
+        }
+        return mapping.get(mode, 'constant')
+
+
+class InferenceCropMode(Enum):
+    """
+    values:
+        squash: scale each side to 1/pct of target size, then center crop
+            (does not keep aspect ratio, no image loss if pct = 1.0)
+        border: scale the longest side to 1/pct of target size, add borders to pad, then center crop
+            (keeps aspect ratio, no image loss if pct = 1.0)
+        center: resize the shortest size keeping aspect ratio, then center crop
+            (keeps aspect ratio, image is lost)
+    """
+    SQUASH = 1
+    BORDER = 2
+    CENTER = 3
+
+
 class TrainCropMode(Enum):
     """
     values:
@@ -289,7 +329,7 @@ def center_crop_or_pad(
         img: torch.Tensor,
         output_size: Union[int, List[int]],
         fill: Union[int, Tuple[int, int, int]] = 0,
-        padding_mode: str = 'constant',
+        padding_mode: PaddingMode = PaddingMode.CONSTANT,
 ) -> torch.Tensor:
     """Center crops and/or pads the given image.
 
@@ -317,7 +357,7 @@ def center_crop_or_pad(
             (crop_width - image_width + 1) // 2 if crop_width > image_width else 0,
             (crop_height - image_height + 1) // 2 if crop_height > image_height else 0,
         ]
-        img = F.pad(img, padding_ltrb, fill=fill, padding_mode=padding_mode)
+        img = F.pad(img, padding_ltrb, fill=fill, padding_mode=PaddingMode.mode2str(padding_mode))
         _, image_height, image_width = F.get_dimensions(img)
         if crop_width == image_width and crop_height == image_height:
             return img
@@ -343,7 +383,7 @@ class CenterCropOrPad(torch.nn.Module):
             self,
             size: Union[int, List[int]],
             fill: Union[int, Tuple[int, int, int]] = 0,
-            padding_mode: str = 'constant',
+            padding_mode: PaddingMode = PaddingMode.CONSTANT,
     ):
         super().__init__()
         self.size = _setup_size(size)
@@ -371,7 +411,7 @@ def crop_or_pad(
         height: int,
         width: int,
         fill: Union[int, Tuple[int, int, int]] = 0,
-        padding_mode: str = 'constant',
+        padding_mode: PaddingMode = PaddingMode.CONSTANT,
 ) -> torch.Tensor:
     """ Crops and/or pads image to meet target size, with control over fill and padding_mode.
     """
@@ -385,7 +425,7 @@ def crop_or_pad(
             max(right - max(image_width, left), 0),
             max(bottom - max(image_height, top), 0),
         ]
-        img = F.pad(img, padding_ltrb, fill=fill, padding_mode=padding_mode)
+        img = F.pad(img, padding_ltrb, fill=fill, padding_mode=PaddingMode.mode2str(padding_mode))
 
     top = max(top, 0)
     left = max(left, 0)
@@ -398,9 +438,9 @@ class RandomCropOrPad(torch.nn.Module):
 
     def __init__(
             self,
-            size: Union[int, List[int]],
+            size: List[int],
             fill: Union[int, Tuple[int, int, int]] = 0,
-            padding_mode: str = 'constant',
+            padding_mode: PaddingMode = PaddingMode.CONSTANT,
     ):
         super().__init__()
         self.size = _setup_size(size)
