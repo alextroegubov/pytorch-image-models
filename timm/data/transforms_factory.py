@@ -13,7 +13,7 @@ from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, DEF
 from timm.data.auto_augment import rand_augment_transform, augment_and_mix_transform, auto_augment_transform
 from timm.data.transforms import str_to_interp_mode, str_to_pil_interp, RandomResizedCropAndInterpolation, \
     ResizeKeepRatio, CenterCropOrPad, RandomCropOrPad, TrimBorder, ToNumpy, MaybeToTensor, MaybePILToTensor, \
-    TrainCropMode
+    TrainCropMode, InferenceCropMode, PaddingMode
 from timm.data.random_erasing import RandomErasing
 
 
@@ -253,8 +253,9 @@ def transforms_imagenet_train(
 def transforms_imagenet_eval(
         img_size: Union[int, Tuple[int, int]] = 224,
         crop_pct: Optional[float] = None,
-        crop_mode: Optional[str] = None,
+        crop_mode: Optional[InferenceCropMode] = None,
         crop_border_pixels: Optional[int] = None,
+        padding_mode: PaddingMode = PaddingMode.CONSTANT,
         interpolation: str = 'bilinear',
         mean: Tuple[float, ...] = IMAGENET_DEFAULT_MEAN,
         std: Tuple[float, ...] = IMAGENET_DEFAULT_STD,
@@ -266,8 +267,9 @@ def transforms_imagenet_eval(
     Args:
         img_size: Target image size.
         crop_pct: Crop percentage. Defaults to 0.875 when None.
-        crop_mode: Crop mode. One of ['squash', 'border', 'center']. Defaults to 'center' when None.
+        crop_mode: Crop mode: squash, border, center
         crop_border_pixels: Trim a border of specified # pixels around edge of original image.
+        padding_mode: padding mode for image
         interpolation: Image interpolation mode.
         mean: Image normalization mean.
         std: Image normalization standard deviation.
@@ -278,6 +280,7 @@ def transforms_imagenet_eval(
         Composed transform pipeline
     """
     crop_pct = crop_pct or DEFAULT_CROP_PCT
+    assert isinstance(crop_pct, InferenceCropMode) and isinstance(padding_mode, PaddingMode)
 
     if isinstance(img_size, (tuple, list)):
         assert len(img_size) == 2
@@ -291,20 +294,22 @@ def transforms_imagenet_eval(
     if crop_border_pixels:
         tfl += [TrimBorder(crop_border_pixels)]
 
-    if crop_mode == 'squash':
+    if crop_mode == InferenceCropMode.SQUASH:
         # squash mode scales each edge to 1/pct of target, then crops
         # aspect ratio is not preserved, no img lost if crop_pct == 1.0
         tfl += [
             transforms.Resize(scale_size, interpolation=str_to_interp_mode(interpolation)),
             transforms.CenterCrop(img_size),
         ]
-    elif crop_mode == 'border':
+    elif crop_mode == InferenceCropMode.BORDER:
         # scale the longest edge of image to 1/pct of target edge, add borders to pad, then crop
         # no image lost if crop_pct == 1.0
-        fill = [round(255 * v) for v in mean]
+
+        # FIXME: do something with fill
+        fill = 0 #[round(255 * v) for v in mean]
         tfl += [
             ResizeKeepRatio(scale_size, interpolation=interpolation, longest=1.0),
-            CenterCropOrPad(img_size, fill=fill),
+            CenterCropOrPad(img_size, fill=fill, padding_mode=padding_mode),
         ]
     else:
         # default crop model is center
@@ -359,7 +364,7 @@ def create_transform(
         re_count: int = 1,
         re_num_splits: int = 0,
         crop_pct: Optional[float] = None,
-        crop_mode: Optional[str] = None,
+        crop_mode: Optional[InferenceCropMode] = None,
         crop_border_pixels: Optional[int] = None,
         tf_preprocessing: bool = False,
         use_prefetcher: bool = False,
@@ -393,7 +398,7 @@ def create_transform(
         re_count: Number of random erasing regions.
         re_num_splits: Control split of random erasing across batch size.
         crop_pct: Inference crop percentage (output size / resize size).
-        crop_mode: Inference crop mode. One of ['squash', 'border', 'center']. Defaults to 'center' when None.
+        crop_mode: Inference crop mode:squash, border, center. Defaults to center when None.
         crop_border_pixels: Inference crop border of specified # pixels around edge of original image.
         tf_preprocessing: Use TF 1.0 inference preprocessing for testing model ports
         use_prefetcher: Pre-fetcher enabled. Do not convert image to tensor or normalize.
