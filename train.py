@@ -26,6 +26,8 @@ from contextlib import suppress
 from datetime import datetime
 from functools import partial
 
+import numpy as np
+
 import torch
 import torch.nn as nn
 import torchvision.utils
@@ -41,6 +43,8 @@ from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler_v2, scheduler_kwargs
 from timm.utils import ApexScaler, NativeScaler
 
+from timm.data.transforms import TrainCropMode, InferenceCropMode, PaddingMode
+
 try:
     from apex import amp
     from apex.parallel import DistributedDataParallel as ApexDDP
@@ -50,11 +54,12 @@ except ImportError:
     has_apex = False
 
 
-try:
-    import wandb
-    has_wandb = True
-except ImportError:
-    has_wandb = False
+
+import wandb
+has_wandb = True
+#os.environ['WANDB_MODE'] = 'offline'
+
+
 
 try:
     from functorch.compile import memory_efficient_fusion
@@ -87,14 +92,12 @@ parser.add_argument('--dataset', metavar='NAME', default='',
                     help='dataset type + name ("<type>/<name>") (default: ImageFolder or ImageTar if empty)')
 group.add_argument('--train-split', metavar='NAME', default='train',
                    help='dataset train split (default: train)')
-group.add_argument('--val-split', metavar='NAME', default='validation',
-                   help='dataset validation split (default: validation)')
+group.add_argument('--val-split', metavar='NAME', default=None,
+                   help='dataset validation split (default: None)')
 parser.add_argument('--train-num-samples', default=None, type=int,
                     metavar='N', help='Manually specify num samples in train split, for IterableDatasets.')
 parser.add_argument('--val-num-samples', default=None, type=int,
                     metavar='N', help='Manually specify num samples in validation split, for IterableDatasets.')
-group.add_argument('--dataset-download', action='store_true', default=False,
-                   help='Allow download of dataset for torch/ and tfds/ datasets that support it.')
 group.add_argument('--class-map', default='', type=str, metavar='FILENAME',
                    help='path to class to idx mapping file (default: "")')
 group.add_argument('--input-img-mode', default=None, type=str,
@@ -133,12 +136,17 @@ group.add_argument('--input-size', default=None, nargs=3, type=int,
                    help='Input all image dimensions (d h w, e.g. --input-size 3 224 224), uses model default if empty')
 group.add_argument('--crop-pct', default=None, type=float,
                    metavar='N', help='Input image center crop percent (for validation only)')
+group.add_argument('--val-crop-mode', default='center', type=str,
+                   choices=['center', 'border', 'squash'],
+                   help='Crop mode for validation dataset')
 group.add_argument('--mean', type=float, nargs='+', default=None, metavar='MEAN',
                    help='Override mean pixel value of dataset')
 group.add_argument('--std', type=float, nargs='+', default=None, metavar='STD',
                    help='Override std deviation of dataset')
 group.add_argument('--interpolation', default='', type=str, metavar='NAME',
                    help='Image resize interpolation type (overrides model)')
+group.add_argument('--use-weighted-sampler', action='store_true', default=False,
+                   help='Use weigted sampler during train')
 group.add_argument('-b', '--batch-size', type=int, default=128, metavar='N',
                    help='Input batch size for training (default: 128)')
 group.add_argument('-vb', '--validation-batch-size', type=int, default=None, metavar='N',
@@ -265,8 +273,14 @@ group.add_argument('--decay-rate', '--dr', type=float, default=0.1, metavar='RAT
 group = parser.add_argument_group('Augmentation and regularization parameters')
 group.add_argument('--no-aug', action='store_true', default=False,
                    help='Disable all training augmentation, override other train aug args')
-group.add_argument('--train-crop-mode', type=str, default=None,
-                   help='Crop-mode in train'),
+group.add_argument('--train-crop-mode', type=str, default='resize_random_crop', 
+                   choices=['resize_random_crop', 'resize_keep_center', 'resize_keep_ratio_random'],
+                   help='Crop-mode in train')
+group.add_argument('--train-resize-longest', type=int, default=0,
+                   help='0 -- resize short size, 1 -- resize long size')
+group.add_argument('--train-padding-mode', type=str, default='reflect',
+                   choices=['constant', 'reflect', 'symmetric', 'edge'],
+                   help='Train padding while resize: constant, reflect, symmetry, ..')
 group.add_argument('--scale', type=float, nargs='+', default=[0.08, 1.0], metavar='PCT',
                    help='Random resize scale (default: 0.08 1.0)')
 group.add_argument('--ratio', type=float, nargs='+', default=[3. / 4., 4. / 3.], metavar='RATIO',
@@ -388,6 +402,7 @@ group.add_argument('--tta', type=int, default=0, metavar='N',
                    help='Test/inference time augmentation (oversampling) factor. 0=None (default: 0)')
 group.add_argument('--use-multi-epochs-loader', action='store_true', default=False,
                    help='use the multi-epochs-loader to save time at the beginning of every epoch')
+
 group.add_argument('--log-wandb', action='store_true', default=False,
                    help='log training and validation metrics to wandb')
 group.add_argument('--wandb-project', default=None, type=str,
@@ -659,13 +674,11 @@ def main():
         split=args.train_split,
         is_training=True,
         class_map=args.class_map,
-        download=args.dataset_download,
+        download=False,
         batch_size=args.batch_size,
         seed=args.seed,
         repeats=args.epoch_repeats,
         input_img_mode=input_img_mode,
-        input_key=args.input_key,
-        target_key=args.target_key,
         num_samples=args.train_num_samples,
         trust_remote_code=args.dataset_trust_remote_code,
     )
@@ -677,11 +690,9 @@ def main():
             split=args.val_split,
             is_training=False,
             class_map=args.class_map,
-            download=args.dataset_download,
+            download=False,
             batch_size=args.batch_size,
             input_img_mode=input_img_mode,
-            input_key=args.input_key,
-            target_key=args.target_key,
             num_samples=args.val_num_samples,
             trust_remote_code=args.dataset_trust_remote_code,
         )
@@ -715,6 +726,7 @@ def main():
     train_interpolation = args.train_interpolation
     if args.no_aug or not train_interpolation:
         train_interpolation = data_config['interpolation']
+
     loader_train = create_loader(
         dataset_train,
         input_size=data_config['input_size'],
@@ -725,7 +737,7 @@ def main():
         re_mode=args.remode,
         re_count=args.recount,
         re_split=args.resplit,
-        train_crop_mode=args.train_crop_mode,
+        train_crop_mode=TrainCropMode[args.train_crop_mode.upper()],
         scale=args.scale,
         ratio=args.ratio,
         hflip=args.hflip,
@@ -749,6 +761,8 @@ def main():
         use_prefetcher=args.prefetcher,
         use_multi_epochs_loader=args.use_multi_epochs_loader,
         worker_seeding=args.worker_seeding,
+        resize_longest=args.train_resize_longest,
+        padding_mode=PaddingMode[args.train_padding_mode.upper()]
     )
 
     loader_eval = None
@@ -768,6 +782,7 @@ def main():
             num_workers=eval_workers,
             distributed=args.distributed,
             crop_pct=data_config['crop_pct'],
+            crop_mode=InferenceCropMode[args.val_crop_mode.upper()],
             pin_memory=args.pin_mem,
             img_dtype=model_dtype or torch.float32,
             device=device,
@@ -812,14 +827,14 @@ def main():
     output_dir = None
     if utils.is_primary(args):
         if args.experiment:
-            exp_name = args.experiment
+            exp_name = '-'.join([args.model, args.experiment])
         else:
             exp_name = '-'.join([
                 datetime.now().strftime("%Y%m%d-%H%M%S"),
                 safe_model_name(args.model),
                 str(data_config['input_size'][-1])
             ])
-        output_dir = utils.get_outdir(args.output if args.output else './output/train', exp_name)
+        output_dir = utils.get_outdir(args.output if args.output else f'./output/train/{args.wandb_project}', exp_name)
         saver = utils.CheckpointSaver(
             model=model,
             optimizer=optimizer,
@@ -1030,6 +1045,7 @@ def train_one_epoch(
     optimizer.zero_grad()
     update_sample_count = 0
     for batch_idx, (input, target) in enumerate(loader):
+
         last_batch = batch_idx == last_batch_idx
         need_update = last_batch or (batch_idx + 1) % accum_steps == 0
         update_idx = batch_idx // accum_steps
