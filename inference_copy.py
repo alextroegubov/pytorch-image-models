@@ -30,10 +30,6 @@ import torch
 import torch.nn.functional as func
 from torch.utils.data import DataLoader
 
-from timm import create_model
-from timm.data.transforms_factory import create_transform
-from timm.data import create_dataset
-
 import matplotlib.pyplot as plt
 
 
@@ -85,19 +81,22 @@ def get_arg_parser() -> ArgumentParser:
                         help='Input image dims (C H W), model default if empty')
     parser.add_argument('--crop-pct', default=1.0, type=float,
                         help='Input image center crop percent')
-    parser.add_argument('--crop-mode', default='center', type=str,
+    parser.add_argument('--crop-mode', default='center', type=str, 
+                        choices=['center', 'squash', 'border'],
                         help='Input image crop mode (squash, border, center)')
+    parser.add_argument('--pad-mode', default='reflect', type=str,
+                        choices=['reflect', 'constant', 'edge', 'symmetric'])
     parser.add_argument('--interpolation', default='bilinear', type=str,
                         help='Interpolation is transform')
     parser.add_argument('--mean', type=float, nargs='+', default=None, metavar='MEAN',
                         help='Override mean pixel value of dataset')
     parser.add_argument('--std', type=float,  nargs='+', default=None, metavar='STD',
                         help='Override std deviation of of dataset')
-    
 
 
     parser.add_argument('--threshold', default='0.75', type=float,
                         help='Threshold for classification (default 0.75)')
+
 
     parser.add_argument('--move-files', action='store_true', default=False,
                         help='Move files or copy them to folder')
@@ -150,8 +149,8 @@ def get_arg_parser() -> ArgumentParser:
                         help='exclude logits/probs from results, just indices. topk must be set !=0.')
 
 
-def get_dataset(root_dir: str, input_size: tuple[int, int, int], crop_pct: float, 
-                crop_mode: str, interpolation: str):
+def get_dataset(root_dir: str, input_size: tuple, interpolation: str,
+                crop_pct: float, crop_mode: str, padding_mode: str):
     """ Create dataset with specific timm transform. Structure: root/cls1/some_file.png"""
     dataset = create_dataset(
         name='',
@@ -161,12 +160,15 @@ def get_dataset(root_dir: str, input_size: tuple[int, int, int], crop_pct: float
     dataset.transform = create_transform(  # type: ignore
         input_size,
         is_training=False,
-        crop_pct=crop_pct,
-        crop_mode=crop_mode,
         interpolation=interpolation,
+        crop_pct=crop_pct,
+        crop_mode=InferenceCropMode[crop_mode.upper()],
+        padding_mode=PaddingMode[padding_mode.upper()],
         crop_border_pixels=0,
-        normalize=True,
-        use_prefetcher=False
+        use_prefetcher=False,
+        normalize=True
+        # mean=mean,
+        # std=std
     )
     return dataset
 
@@ -174,7 +176,8 @@ def get_dataset(root_dir: str, input_size: tuple[int, int, int], crop_pct: float
 def inference(data_dir: str, class_map: str, checkpoint: str, model_name: str, device: str,
               num_classes: int, input_size: tuple, crop_pct: float, crop_mode: str,
               interpolation: str, batch_size: int, threshold: float, move_files: bool,
-              show_stats: bool, single_folder: bool, only_this_class: str | None = None):
+              show_stats: bool, single_folder: bool, only_this_class: str | None = None,
+              num_gpu: int = 1):
     setup_default_logging()
 
     if torch.cuda.is_available():
@@ -188,7 +191,10 @@ def inference(data_dir: str, class_map: str, checkpoint: str, model_name: str, d
         interpolation=interpolation,
         crop_pct=crop_pct,
         crop_mode=crop_mode,
+        padding_mode='constant',
     )
+    _logger.info(f'Read dataset from {data_dir}: {len(dataset)} samples')
+
     # different mappings
     class2idx, idx2class, target_names = read_class_map(class_map)
     # create loader
@@ -198,37 +204,53 @@ def inference(data_dir: str, class_map: str, checkpoint: str, model_name: str, d
     model = create_model(model_name, pretrained=True, num_classes=num_classes,
                          checkpoint_path=checkpoint).to(device)
     model.eval()
-    _logger.info(
-        f'Model {args.model} created, param count: {sum([m.numel() for m in model.parameters()])}')
+    n_params = sum([m.numel() for m in model.parameters()])
+    _logger.info(f'Model {model_name} created, #params: {n_params}')
 
-
+    if num_gpu > 1:
+        model = torch.nn.DataParallel(model, device_ids=list(range(num_gpu)))
 
     workers = 1 if 'tfds' in args.dataset or 'wds' in args.dataset else args.workers
 
 
-    device = torch.device(device)
+    with torch.no_grad():
+        for (batch_idx, (batch_data, _)) in tqdm(enumerate(loader), total=len(loader), ncols=50):
+            logits = model(batch_data.to(device))
+            prob_per_class = func.softmax(logits, dim=-1)
+            prob_values, labels = torch.topk(prob_per_class, k=1, dim=-1)
 
-    model = model.to(device)
-    model.eval()
+            # first create pandas data frame, then postprocessing
+            # (filename, class_label, prob, logit)
+            # save embeddings, save logits
 
-    if args.num_gpu > 1:
-        model = torch.nn.DataParallel(model, device_ids=list(range(args.num_gpu)))
+            for local_idx in range(batch_data.shape[0]):
+                pred_prob = prob_values[local_idx].cpu().item()
+                class_label = idx2class[labels[local_idx].cpu().item()]
+                img_idx = batch_idx * batch_size + local_idx
+
+                src_filename = Path(data_dir) / dataset.filename(img_idx)  # type: ignore
+
+                if only_this_class is not None and class_label == only_this_class:
+                    prob_idx = [i for (i, x) in enumerate(probs) if pred_prob > x][0]
+                    new_folder = Path(folders_lst[prob_idx])
+                elif only_this_class is not None:
+                    continue
+                else:
+                    if pred_prob >= threshold:
+                        new_folder = Path(class_label + more_thre)
+                    elif single_folder:
+                        new_folder = Path('no_label')
+                    else:
+                        new_folder = Path(class_label + less_thre)
+
+                dst_filename = Path(data_dir) / new_folder / src_filename.name
+
+                if move_files:
+                    src_filename.rename(dst_filename)
+                else:
+                    shutil.copy(src_filename, dst_filename)
 
 
-    to_label = None
-    if args.label_type in ('name', 'description', 'detail'):
-        imagenet_subset = infer_imagenet_subset(model)
-        if imagenet_subset is not None:
-            dataset_info = ImageNetInfo(imagenet_subset)
-            if args.label_type == 'name':
-                to_label = lambda x: dataset_info.index_to_label_name(x)
-            elif args.label_type == 'detail':
-                to_label = lambda x: dataset_info.index_to_description(x, detailed=True)
-            else:
-                to_label = lambda x: dataset_info.index_to_description(x)
-            to_label = np.vectorize(to_label)
-        else:
-            _logger.error("Cannot deduce ImageNet subset from model, no labelling will be performed.")
 
     top_k = min(args.topk, args.num_classes)
     batch_time = AverageMeter()
