@@ -9,6 +9,8 @@ import os
 import time
 from contextlib import suppress
 from functools import partial
+from enum import Enum
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -18,6 +20,7 @@ from timm.data import create_dataset, create_loader, ImageNetInfo, infer_imagene
 from timm.layers import apply_test_time_pool
 from timm.models import create_model
 from timm.data.transforms_factory import create_transform
+from timm.data.transforms import InferenceCropMode, PaddingMode
 from timm.utils import AverageMeter, setup_default_logging, set_jit_fuser, ParseKwargs
 
 
@@ -31,15 +34,6 @@ import torch.nn.functional as func
 from torch.utils.data import DataLoader
 
 import matplotlib.pyplot as plt
-
-
-_FMT_EXT = {
-    'json': '.json',
-    'json-record': '.json',
-    'json-split': '.json',
-    'parquet': '.parquet',
-    'csv': '.csv',
-}
 
 torch.backends.cudnn.benchmark = True
 _logger = logging.getLogger('inference')
@@ -64,24 +58,28 @@ def read_class_map(filename: str):
 def get_arg_parser() -> ArgumentParser:
     parser = ArgumentParser(description='Pytorch inference')
 
-    parser.add_argument('--data-dir', type=str, help='path to dataset root dir')
-    parser.add_argument('--class-map', type=str, help='path to class to idx mapping file')
+    parser.add_argument('--data-dir', type=str,
+                        help='path to dataset root dir')
+    parser.add_argument('--class-map', type=str,
+                        help='path to class to idx mapping file')
 
     parser.add_argument('--model-name', type=str, help='model architecture')
-    parser.add_argument('--checkpoint', type=str, help='path to model checkpoint')
+    parser.add_argument('--checkpoint', type=str,
+                        help='path to model checkpoint')
     parser.add_argument('--num-classes', type=int, help='Number of classes')
 
-
-    parser.add_argument('--batch-size', default=64, type=int, help='batch size')
-    parser.add_argument('--device', type=str, default='cuda', help="Device to use")
-    parser.add_argument('--num-gpu', type=int, default=1, help='Number of GPUS to use')
-
+    parser.add_argument('--batch-size', default=64,
+                        type=int, help='batch size')
+    parser.add_argument('--device', type=str,
+                        default='cuda', help="Device to use")
+    parser.add_argument('--num-gpu', type=int, default=1,
+                        help='Number of GPUS to use')
 
     parser.add_argument('--input-size', default=None, nargs=3, type=int,
                         help='Input image dims (C H W), model default if empty')
     parser.add_argument('--crop-pct', default=1.0, type=float,
                         help='Input image center crop percent')
-    parser.add_argument('--crop-mode', default='center', type=str, 
+    parser.add_argument('--crop-mode', default='center', type=str,
                         choices=['center', 'squash', 'border'],
                         help='Input image crop mode (squash, border, center)')
     parser.add_argument('--pad-mode', default='reflect', type=str,
@@ -90,13 +88,11 @@ def get_arg_parser() -> ArgumentParser:
                         help='Interpolation is transform')
     parser.add_argument('--mean', type=float, nargs='+', default=None, metavar='MEAN',
                         help='Override mean pixel value of dataset')
-    parser.add_argument('--std', type=float,  nargs='+', default=None, metavar='STD',
+    parser.add_argument('--std', type=float, nargs='+', default=None, metavar='STD',
                         help='Override std deviation of of dataset')
-
 
     parser.add_argument('--threshold', default='0.75', type=float,
                         help='Threshold for classification (default 0.75)')
-
 
     parser.add_argument('--move-files', action='store_true', default=False,
                         help='Move files or copy them to folder')
@@ -107,14 +103,11 @@ def get_arg_parser() -> ArgumentParser:
     parser.add_argument('--only-this-class', type=str, default=None,
                         help='Sort only this class images')
 
-
-
     parser.add_argument('-j', '--workers', default=2, type=int, metavar='N',
                         help='number of data loading workers (default: 2)')
 
     parser.add_argument('--use-train-size', action='store_true', default=False,
                         help='force use of train input size, even when test size is specified in pretrained cfg')
-
 
     parser.add_argument('--log-freq', default=10, type=int,
                         metavar='N', help='batch logging frequency (default: 10)')
@@ -149,14 +142,16 @@ def get_arg_parser() -> ArgumentParser:
                         help='exclude logits/probs from results, just indices. topk must be set !=0.')
 
 
-def get_dataset(root_dir: str, input_size: tuple, interpolation: str,
-                crop_pct: float, crop_mode: str, padding_mode: str):
-    """ Create dataset with specific timm transform. Structure: root/cls1/some_file.png"""
-    dataset = create_dataset(
-        name='',
-        split='',
-        root=root_dir
-    )
+def get_dataset(
+    root_dir: str,
+    input_size: tuple,
+    interpolation: str,
+    crop_pct: float,
+    crop_mode: str,
+    padding_mode: str,
+):
+    """Create dataset with specific timm transform. Structure: root/cls1/some_file.png"""
+    dataset = create_dataset(name="", split="", root=root_dir)
     dataset.transform = create_transform(  # type: ignore
         input_size,
         is_training=False,
@@ -166,18 +161,123 @@ def get_dataset(root_dir: str, input_size: tuple, interpolation: str,
         padding_mode=PaddingMode[padding_mode.upper()],
         crop_border_pixels=0,
         use_prefetcher=False,
-        normalize=True
+        normalize=True,
         # mean=mean,
         # std=std
     )
     return dataset
 
 
-def inference(data_dir: str, class_map: str, checkpoint: str, model_name: str, device: str,
-              num_classes: int, input_size: tuple, crop_pct: float, crop_mode: str,
-              interpolation: str, batch_size: int, threshold: float, move_files: bool,
-              show_stats: bool, single_folder: bool, only_this_class: str | None = None,
-              num_gpu: int = 1):
+def compute_embeddings():
+    pass
+
+
+def compute_and_save_logits():
+    pass
+
+
+def process_target_class(
+    save_dir: str | Path,
+    filenames: list[str],
+    target_class: str,
+    all_probs: np.ndarray,
+    all_labels: list[str],
+):
+    # set different thresholds
+    THRESHOLDS = (0.99, 0.97, 0.95, 0.90, 0.85, 0.80, 0.70, 0.1)
+    # create folders
+    folder_names = [
+        Path(save_dir) / f"{target_class}_split" / Path(f"more_{prob:.2f}") for prob in THRESHOLDS
+    ]
+    _ = [folder.mkdir(parents=True, exist_ok=True) for folder in folder_names]
+
+    for idx, file in enumerate(filenames):
+        if all_labels[idx] == target_class:
+            prob_idx = [i for (i, x) in enumerate(THRESHOLDS) if all_probs[idx] > x][0]
+            Path(file).rename(folder_names[prob_idx] / Path(file).name)
+
+    # delete empty folders
+    _ = [folder.rmdir() for folder in folder_names if len(list(folder.rglob("*"))) == 0]
+    res_folders = [folder for folder in folder_names if folder.exists()]
+
+    return res_folders
+
+
+def process_split_classes(
+    save_dir: str | Path,
+    filenames: list[str],
+    class_names: list[str],
+    all_labels: list[str],
+):
+    # create folders:
+    save_path = Path(save_dir)
+    folder_names: list[Path] = []
+    for cls in class_names:
+        save_path.joinpath(cls).mkdir(parents=True, exist_ok=True)
+        folder_names.append(save_path / cls)
+
+    for idx, file in enumerate(filenames):
+        label = all_labels[idx]
+        Path(file).rename(save_path / label / Path(file).name)
+
+    return folder_names
+    # FIXME: delete empty folders
+
+
+def process_split_classes_on_threshold(
+    save_dir: str | Path,
+    filenames: list[str],
+    class_names: list[str],
+    all_labels: list[str],
+    threshold: float,
+    all_probs: np.ndarray,
+):
+    # create folders:
+    save_path = Path(save_dir)
+    thre_str = f"_{threshold:.2f}"
+    folder_names = [save_path.joinpath(cls + thre_str) for cls in class_names]
+    folder_names.append(save_path / "no_label")
+
+    for folder in folder_names:
+        folder.mkdir(parents=True, exist_ok=True)
+
+    # split files
+    for idx, file in enumerate(filenames):
+        label = all_labels[idx]
+        prob = all_probs[idx]
+
+        new_parent = label + thre_str if prob >= threshold else "no_label"
+        Path(file).rename(save_path / new_parent / Path(file).name)
+
+    # delete empty folders
+    _ = [folder.rmdir() for folder in folder_names if len(list(folder.rglob("*"))) == 0]
+    res_folders = [folder for folder in folder_names if folder.exists()]
+
+    return res_folders
+
+
+def inference(
+    data_dir: str,
+    class_map: str,
+    checkpoint: str,
+    model_name: str,
+    device: str,
+    num_classes: int,
+    input_size: tuple,
+    crop_pct: float,
+    crop_mode: str,
+    interpolation: str,
+    batch_size: int,
+    threshold: float,
+    show_stats: bool,
+    save_dir: Optional[str] = None,
+    num_gpu: int = 1,
+    save_tsv: bool = False,
+    only_target_class: Optional[str] = None,
+    split_classes: bool = False,
+    split_classes_on_threshold: bool = False,
+):
+
     setup_default_logging()
 
     if torch.cuda.is_available():
@@ -191,168 +291,87 @@ def inference(data_dir: str, class_map: str, checkpoint: str, model_name: str, d
         interpolation=interpolation,
         crop_pct=crop_pct,
         crop_mode=crop_mode,
-        padding_mode='constant',
+        padding_mode="constant",
     )
-    _logger.info(f'Read dataset from {data_dir}: {len(dataset)} samples')
+    _logger.info(f"Read dataset from {data_dir}: {len(dataset)} samples")
 
     # different mappings
-    class2idx, idx2class, target_names = read_class_map(class_map)
+    _, idx2class, target_names = read_class_map(class_map)
     # create loader
     loader = DataLoader(dataset, batch_size=batch_size, drop_last=False, shuffle=False)
     # set device and create model
-    device = torch.device(device) # type: ignore
-    model = create_model(model_name, pretrained=True, num_classes=num_classes,
-                         checkpoint_path=checkpoint).to(device)
+    device = torch.device(device)  # type: ignore
+    model = create_model(
+        model_name, pretrained=True, num_classes=num_classes, checkpoint_path=checkpoint
+    ).to(device)
     model.eval()
     n_params = sum([m.numel() for m in model.parameters()])
-    _logger.info(f'Model {model_name} created, #params: {n_params}')
+    _logger.info(f"Model {model_name} created, #params: {n_params}")
 
     if num_gpu > 1:
         model = torch.nn.DataParallel(model, device_ids=list(range(num_gpu)))
+    _logger.info(f"Inference on {num_gpu} {device}, batch_size = {batch_size}")
 
-    workers = 1 if 'tfds' in args.dataset or 'wds' in args.dataset else args.workers
-
+    # (filename, class_idx, class_prob)
+    all_filenames = dataset.filenames(absolute=True)  # type: ignore
+    all_idx = []
+    all_probs = []
 
     with torch.no_grad():
-        for (batch_idx, (batch_data, _)) in tqdm(enumerate(loader), total=len(loader), ncols=50):
+        for batch_data, _ in tqdm(loader, total=len(loader), ncols=50):
             logits = model(batch_data.to(device))
             prob_per_class = func.softmax(logits, dim=-1)
-            prob_values, labels = torch.topk(prob_per_class, k=1, dim=-1)
+            prob_values, labels_idx = torch.topk(prob_per_class, k=1, dim=-1)
 
-            # first create pandas data frame, then postprocessing
-            # (filename, class_label, prob, logit)
-            # save embeddings, save logits
+            all_idx.append(labels_idx.squeeze().cpu().numpy())
+            all_probs.append(prob_values.squeeze().cpu().numpy())
 
-            for local_idx in range(batch_data.shape[0]):
-                pred_prob = prob_values[local_idx].cpu().item()
-                class_label = idx2class[labels[local_idx].cpu().item()]
-                img_idx = batch_idx * batch_size + local_idx
+    # postprocessing
+    all_idx = np.concatenate(all_idx, axis=0)
+    all_labels = list(map(lambda x: idx2class[x], all_idx))
+    all_probs = np.concatenate(all_probs, axis=0)
 
-                src_filename = Path(data_dir) / dataset.filename(img_idx)  # type: ignore
+    folders = []
 
-                if only_this_class is not None and class_label == only_this_class:
-                    prob_idx = [i for (i, x) in enumerate(probs) if pred_prob > x][0]
-                    new_folder = Path(folders_lst[prob_idx])
-                elif only_this_class is not None:
-                    continue
-                else:
-                    if pred_prob >= threshold:
-                        new_folder = Path(class_label + more_thre)
-                    elif single_folder:
-                        new_folder = Path('no_label')
-                    else:
-                        new_folder = Path(class_label + less_thre)
+    if only_target_class in target_names:
+        folders = process_target_class(
+            save_dir=save_dir,
+            target_class=only_target_class,
+            filenames=all_filenames,
+            all_labels=all_labels,
+            all_probs=all_probs,
+        )
 
-                dst_filename = Path(data_dir) / new_folder / src_filename.name
+    elif split_classes:
+        folders = process_split_classes(
+            save_dir=save_dir,
+            filenames=all_filenames,
+            all_labels=all_labels,
+            class_names=target_names,
+        )
 
-                if move_files:
-                    src_filename.rename(dst_filename)
-                else:
-                    shutil.copy(src_filename, dst_filename)
+    elif split_classes_on_threshold:
+        folders = process_split_classes_on_threshold(
+            save_dir=save_dir,
+            threshold=threshold,
+            filenames=all_filenames,
+            all_labels=all_labels,
+            class_names=target_names,
+            all_probs=all_probs,
+        )
 
+    if show_stats:
+        print(f"Sorted {len(dataset)} files in {data_dir}")
+        for folder in folders:
+            total = len(dataset)
+            n_folder = len(list(folder.glob("*")))
 
-
-    top_k = min(args.topk, args.num_classes)
-    batch_time = AverageMeter()
-    end = time.time()
-    all_indices = []
-    all_labels = []
-    all_outputs = []
-    use_probs = args.output_type == 'prob'
-    with torch.no_grad():
-        for batch_idx, (input, _) in enumerate(loader):
-
-            with amp_autocast():
-                output = model(input)
-
-            if use_probs:
-                output = output.softmax(-1)
-
-            if top_k:
-                output, indices = output.topk(top_k)
-                np_indices = indices.cpu().numpy()
-                if args.include_index:
-                    all_indices.append(np_indices)
-                if to_label is not None:
-                    np_labels = to_label(np_indices)
-                    all_labels.append(np_labels)
-
-            all_outputs.append(output.cpu().numpy())
-
-            # measure elapsed time
-            batch_time.update(time.time() - end)
-            end = time.time()
-
-            if batch_idx % args.log_freq == 0:
-                _logger.info('Predict: [{0}/{1}] Time {batch_time.val:.3f} ({batch_time.avg:.3f})'.format(
-                    batch_idx, len(loader), batch_time=batch_time))
-
-    all_indices = np.concatenate(all_indices, axis=0) if all_indices else None
-    all_labels = np.concatenate(all_labels, axis=0) if all_labels else None
-    all_outputs = np.concatenate(all_outputs, axis=0).astype(np.float32)
-    filenames = loader.dataset.filenames(basename=not args.fullname)
-
-    output_col = args.output_col or ('prob' if use_probs else 'logit')
-    data_dict = {args.filename_col: filenames}
-    if args.results_separate_col and all_outputs.shape[-1] > 1:
-        if all_indices is not None:
-            for i in range(all_indices.shape[-1]):
-                data_dict[f'{args.index_col}_{i}'] = all_indices[:, i]
-        if all_labels is not None:
-            for i in range(all_labels.shape[-1]):
-                data_dict[f'{args.label_col}_{i}'] = all_labels[:, i]
-        for i in range(all_outputs.shape[-1]):
-            data_dict[f'{output_col}_{i}'] = all_outputs[:, i]
-    else:
-        if all_indices is not None:
-            if all_indices.shape[-1] == 1:
-                all_indices = all_indices.squeeze(-1)
-            data_dict[args.index_col] = list(all_indices)
-        if all_labels is not None:
-            if all_labels.shape[-1] == 1:
-                all_labels = all_labels.squeeze(-1)
-            data_dict[args.label_col] = list(all_labels)
-        if all_outputs.shape[-1] == 1:
-            all_outputs = all_outputs.squeeze(-1)
-        data_dict[output_col] = list(all_outputs)
-
-    df = pd.DataFrame(data=data_dict)
-
-    results_filename = args.results_file
-    if results_filename:
-        filename_no_ext, ext = os.path.splitext(results_filename)
-        if ext and ext in _FMT_EXT.values():
-            # if filename provided with one of expected ext,
-            # remove it as it will be added back
-            results_filename = filename_no_ext
-    else:
-        # base default filename on model name + img-size
-        img_size = data_config["input_size"][1]
-        results_filename = f'{args.model}-{img_size}'
-
-    if args.results_dir:
-        results_filename = os.path.join(args.results_dir, results_filename)
-
-    for fmt in args.results_format:
-        save_results(df, results_filename, fmt)
-
-    print(f'--result')
-    print(df.set_index(args.filename_col).to_json(orient='index', indent=4))
+            print(
+                f"\t--{folder.parent.name}/{folder.name} has {n_folder} images"
+                + f"({n_folder / total * 100:.1f}%)"
+            )
 
 
-def save_results(df, results_filename, results_format='csv', filename_col='filename'):
-    results_filename += _FMT_EXT[results_format]
-    if results_format == 'parquet':
-        df.set_index(filename_col).to_parquet(results_filename)
-    elif results_format == 'json':
-        df.set_index(filename_col).to_json(results_filename, indent=4, orient='index')
-    elif results_format == 'json-records':
-        df.to_json(results_filename, lines=True, orient='records')
-    elif results_format == 'json-split':
-        df.to_json(results_filename, indent=4, orient='split', index=False)
-    else:
-        df.to_csv(results_filename, index=False)
-
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    args = get_arg_parser().parse_args()
+    inference(**dict(args._get_kwargs()))
