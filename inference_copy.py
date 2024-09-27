@@ -3,49 +3,35 @@
 Custom inference for timm library
 """
 from argparse import ArgumentParser
-import json
 import logging
-import os
-import time
-from contextlib import suppress
-from functools import partial
-from enum import Enum
 from typing import Optional
-
-import numpy as np
-import pandas as pd
-import torch
-
-from timm.data import create_dataset, create_loader, ImageNetInfo, infer_imagenet_subset
-from timm.layers import apply_test_time_pool
-from timm.models import create_model
-from timm.data.transforms_factory import create_transform
-from timm.data.transforms import InferenceCropMode, PaddingMode
-from timm.utils import AverageMeter, setup_default_logging, set_jit_fuser, ParseKwargs
-
-
-import shutil
 from pathlib import Path
 
 from tqdm import tqdm
+import numpy as np
+import pandas as pd
 
 import torch
 import torch.nn.functional as func
 from torch.utils.data import DataLoader
 
-import matplotlib.pyplot as plt
+from timm.data import create_dataset
+from timm.data.transforms_factory import create_transform
+from timm.data.transforms import InferenceCropMode, PaddingMode
+from timm.models import create_model
+from timm.utils import setup_default_logging
 
 torch.backends.cudnn.benchmark = True
-_logger = logging.getLogger('inference')
+_logger = logging.getLogger("inference")
 
 
 def read_class_map(filename: str):
-    """ Read class map file, return two dicts and list of names"""
+    """Read class map file, return two dicts and list of names"""
     class_to_idx = {}
     idx_to_class = {}
     target_names = []
-    with open(filename, 'r', encoding='utf-8') as f:
-        for (idx, line) in enumerate(f.readlines()):
+    with open(filename, "r", encoding="utf-8") as f:
+        for idx, line in enumerate(f.readlines()):
             class_name = line.strip()
 
             class_to_idx[class_name] = idx
@@ -102,44 +88,7 @@ def get_arg_parser() -> ArgumentParser:
                         help='Create only one <more> threshold folder')
     parser.add_argument('--only-this-class', type=str, default=None,
                         help='Sort only this class images')
-
-    parser.add_argument('-j', '--workers', default=2, type=int, metavar='N',
-                        help='number of data loading workers (default: 2)')
-
-    parser.add_argument('--use-train-size', action='store_true', default=False,
-                        help='force use of train input size, even when test size is specified in pretrained cfg')
-
-    parser.add_argument('--log-freq', default=10, type=int,
-                        metavar='N', help='batch logging frequency (default: 10)')
-
-    parser.add_argument('--results-dir', type=str, default=None,
-                        help='folder for output results')
-    parser.add_argument('--results-file', type=str, default=None,
-                        help='results filename (relative to results-dir)')
-    parser.add_argument('--results-format', type=str, nargs='+', default=['csv'],
-                        help='results format (one of "csv", "json", "json-split", "parquet")')
-    parser.add_argument('--results-separate-col', action='store_true', default=False,
-                        help='separate output columns per result index.')
-    parser.add_argument('--topk', default=1, type=int,
-                        metavar='N', help='Top-k to output to CSV')
-    parser.add_argument('--fullname', action='store_true', default=False,
-                        help='use full sample name in output (not just basename).')
-    parser.add_argument('--filename-col', type=str, default='filename',
-                        help='name for filename / sample name column')
-    parser.add_argument('--index-col', type=str, default='index',
-                        help='name for output indices column(s)')
-    parser.add_argument('--label-col', type=str, default='label',
-                        help='name for output indices column(s)')
-    parser.add_argument('--output-col', type=str, default=None,
-                        help='name for logit/probs output column(s)')
-    parser.add_argument('--output-type', type=str, default='prob',
-                        help='output type colum ("prob" for probabilities, "logit" for raw logits)')
-    parser.add_argument('--label-type', type=str, default='description',
-                        help='type of label to output, one of  "none", "name", "description", "detailed"')
-    parser.add_argument('--include-index', action='store_true', default=False,
-                        help='include the class index in results')
-    parser.add_argument('--exclude-output', action='store_true', default=False,
-                        help='exclude logits/probs from results, just indices. topk must be set !=0.')
+    return parser
 
 
 def get_dataset(
@@ -168,14 +117,6 @@ def get_dataset(
     return dataset
 
 
-def compute_embeddings():
-    pass
-
-
-def compute_and_save_logits():
-    pass
-
-
 def process_target_class(
     save_dir: str | Path,
     filenames: list[str],
@@ -184,16 +125,16 @@ def process_target_class(
     all_labels: list[str],
 ):
     # set different thresholds
-    THRESHOLDS = (0.99, 0.97, 0.95, 0.90, 0.85, 0.80, 0.70, 0.1)
+    thresholds = (0.99, 0.97, 0.95, 0.90, 0.85, 0.80, 0.70, 0.1)
     # create folders
     folder_names = [
-        Path(save_dir) / f"{target_class}_split" / Path(f"more_{prob:.2f}") for prob in THRESHOLDS
+        Path(save_dir) / f"{target_class}_split" / Path(f"more_{prob:.2f}") for prob in thresholds
     ]
     _ = [folder.mkdir(parents=True, exist_ok=True) for folder in folder_names]
 
     for idx, file in enumerate(filenames):
         if all_labels[idx] == target_class:
-            prob_idx = [i for (i, x) in enumerate(THRESHOLDS) if all_probs[idx] > x][0]
+            prob_idx = [i for (i, x) in enumerate(thresholds) if all_probs[idx] > x][0]
             Path(file).rename(folder_names[prob_idx] / Path(file).name)
 
     # delete empty folders
@@ -270,7 +211,7 @@ def inference(
     batch_size: int,
     threshold: float,
     show_stats: bool,
-    save_dir: Optional[str] = None,
+    save_dir: Optional[str | Path] = None,
     num_gpu: int = 1,
     save_tsv: bool = False,
     only_target_class: Optional[str] = None,
@@ -279,6 +220,15 @@ def inference(
 ):
 
     setup_default_logging()
+
+    if [only_target_class is not None, split_classes, split_classes_on_threshold].count(True) > 1:
+        _logger.error(
+            "Options <only_target_class>, <split_classes>, <split_classes_on_threshold> "
+            "are mutually exclusive"
+        )
+        return
+    # save in data_dir if save_dir is None
+    save_dir = Path(save_dir or data_dir)
 
     if torch.cuda.is_available():
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -312,8 +262,8 @@ def inference(
         model = torch.nn.DataParallel(model, device_ids=list(range(num_gpu)))
     _logger.info(f"Inference on {num_gpu} {device}, batch_size = {batch_size}")
 
-    # (filename, class_idx, class_prob)
-    all_filenames = dataset.filenames(absolute=True)  # type: ignore
+    # compute class indices and probabilities
+    all_filenames: list[str] = dataset.filenames(absolute=True)  # type: ignore
     all_idx = []
     all_probs = []
 
@@ -333,7 +283,7 @@ def inference(
 
     folders = []
 
-    if only_target_class in target_names:
+    if only_target_class is not None and only_target_class in target_names:
         folders = process_target_class(
             save_dir=save_dir,
             target_class=only_target_class,
@@ -359,6 +309,20 @@ def inference(
             class_names=target_names,
             all_probs=all_probs,
         )
+
+    if save_tsv:
+        filenames = list(map(lambda x: Path(x).name, all_filenames))
+        parents = list(map(lambda x: Path(x).parent, all_filenames))
+        df = pd.DataFrame.from_dict(
+            {
+                "dataset_index": np.arange(len(all_filenames), dtype=np.int64),
+                "parent": parents,
+                "filename": filenames,
+                "label": all_labels,
+                "probability": all_probs,
+            }
+        )
+        df.to_csv(save_dir / "inf_result.tsv", index=False, sep="\t")
 
     if show_stats:
         print(f"Sorted {len(dataset)} files in {data_dir}")
