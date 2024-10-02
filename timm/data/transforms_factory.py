@@ -13,7 +13,7 @@ from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, DEF
 from timm.data.auto_augment import rand_augment_transform, augment_and_mix_transform, auto_augment_transform
 from timm.data.transforms import str_to_interp_mode, str_to_pil_interp, RandomResizedCropAndInterpolation, \
     ResizeKeepRatio, CenterCropOrPad, RandomCropOrPad, TrimBorder, ToNumpy, MaybeToTensor, MaybePILToTensor, \
-    TrainCropMode, InferenceCropMode, PaddingMode
+    TrainCropMode, InferenceCropMode, PaddingMode, ResizeIfLargerKeepRatio
 from timm.data.random_erasing import RandomErasing
 
 
@@ -143,6 +143,21 @@ def transforms_imagenet_train(
             CenterCropOrPad(img_size, padding_mode=padding_mode)
             if train_crop_mode == TrainCropMode.RESIZE_KEEP_RATIO_CENTER else
             RandomCropOrPad(img_size, padding_mode=padding_mode)
+        ]
+    elif train_crop_mode == TrainCropMode.KEEP_SCALE_AND_RATIO_PAD:
+        scale = tuple(scale or (0.8, 1.00))
+        ratio = tuple(ratio or (0.9, 1/.9))
+        primary_tfl = [
+            ResizeIfLargerKeepRatio(
+                img_size,
+                interpolation=interpolation,
+                random_scale_prob=0.5,
+                random_scale_range=scale,
+                random_scale_area=True,  # scale compatible with RRC
+                random_aspect_prob=0.5,
+                random_aspect_range=ratio,
+            ),
+            CenterCropOrPad(img_size, padding_mode=padding_mode)
         ]
     else:
         scale = tuple(scale or (0.08, 1.0))  # default imagenet scale range
@@ -308,6 +323,13 @@ def transforms_imagenet_eval(
         tfl += [
             ResizeKeepRatio(scale_size, interpolation=interpolation, longest=1.0),
             CenterCropOrPad(img_size, fill=fill, padding_mode=padding_mode),
+        ]
+    elif crop_mode == InferenceCropMode.PAD_AROUND:
+        fill = 0
+        tfl += [
+            ResizeIfLargerKeepRatio(scale_size, interpolation=interpolation, random_aspect_prob=0.0, 
+                                    random_scale_prob=0.0, random_scale_area=False),
+            CenterCropOrPad(img_size, fill=fill, padding_mode=padding_mode)
         ]
     else:
         # default crop model is center

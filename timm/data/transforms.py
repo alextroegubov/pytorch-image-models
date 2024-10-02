@@ -61,6 +61,7 @@ class InferenceCropMode(Enum):
     SQUASH = 1
     BORDER = 2
     CENTER = 3
+    PAD_AROUND = 4
 
 
 class TrainCropMode(Enum):
@@ -76,6 +77,7 @@ class TrainCropMode(Enum):
     RESIZE_RANDOM_CROP = 1
     RESIZE_KEEP_RATIO_CENTER = 2
     RESIZE_KEEP_RATIO_RANDOM = 3
+    KEEP_SCALE_AND_RATIO_PAD = 4
 
 
 class ToNumpy:
@@ -618,6 +620,85 @@ class ResizeKeepRatio:
         format_string += f', random_aspect_range=(' \
                          f'{self.random_aspect_range[0]:.3f}, {self.random_aspect_range[1]:.3f}))'
         return format_string
+
+
+class ResizeIfLargerKeepRatio(ResizeKeepRatio):
+    """ Resize the image if it is larger than target size and Keep Aspect Ratio
+    """
+
+    def __init__(
+            self,
+            size,
+            interpolation='bilinear',
+            random_scale_prob=0.,
+            random_scale_range=(0.85, 1.05),
+            random_scale_area=False,
+            random_aspect_prob=0.,
+            random_aspect_range=(0.9, 1.11),
+    ):
+        """
+
+        Args:
+            size:
+            interpolation:
+            random_scale_prob:
+            random_scale_range:
+            random_scale_area:
+            random_aspect_prob:
+            random_aspect_range:
+        """
+        super().__init__(
+            size=size,
+            interpolation=interpolation,
+            random_scale_prob=random_scale_prob,
+            random_scale_range=random_scale_range,
+            random_scale_area=random_scale_area,
+            random_aspect_prob=random_aspect_prob,
+            random_aspect_range=random_aspect_range
+        )
+
+    @staticmethod
+    def get_params(
+            img,
+            target_size,
+            longest,    
+            random_scale_prob=0.,
+            random_scale_range=(1.0, 1.33),
+            random_scale_area=False,
+            random_aspect_prob=0.,
+            random_aspect_range=(0.9, 1.11)
+    ):
+        """Get parameters
+        """
+        img_h, img_w = img_size = F.get_dimensions(img)[1:]
+        target_h, target_w = target_size
+
+        ratio = (
+            1.0
+            if img_h <= target_h and img_w <= target_w
+            else max(img_h / target_h, img_w / target_w)
+        )
+
+        if random_scale_prob > 0 and random.random() < random_scale_prob:
+            ratio_factor = random.uniform(random_scale_range[0], random_scale_range[1])
+            if random_scale_area:
+                # make ratio factor equivalent to RRC area crop where < 1.0 = area zoom,
+                # otherwise like affine scale where < 1.0 = linear zoom out
+                ratio_factor = 1. / math.sqrt(ratio_factor)
+            ratio_factor = (ratio_factor, ratio_factor)
+        else:
+            ratio_factor = (1., 1.)
+
+        if random_aspect_prob > 0 and random.random() < random_aspect_prob:
+            log_aspect = (math.log(random_aspect_range[0]), math.log(random_aspect_range[1]))
+            aspect_factor = math.exp(random.uniform(*log_aspect))
+            aspect_factor = math.sqrt(aspect_factor)
+            # currently applying random aspect adjustment equally to both dims,
+            # could change to keep output sizes above their target where possible
+            ratio_factor = (ratio_factor[0] / aspect_factor, ratio_factor[1] * aspect_factor)
+
+        size = [round(x * f / ratio) for x, f in zip(img_size, ratio_factor)]
+        return size
 
 
 class TrimBorder(torch.nn.Module):
