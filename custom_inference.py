@@ -22,7 +22,6 @@ from timm.models import create_model
 from timm.utils import setup_default_logging
 
 torch.backends.cudnn.benchmark = True
-_logger = logging.getLogger("inference")
 
 
 def read_class_map(filename: str):
@@ -68,7 +67,7 @@ def get_arg_parser() -> ArgumentParser:
     parser.add_argument('--crop-mode', default='center', type=str,
                         choices=['center', 'squash', 'border'],
                         help='Input image crop mode (squash, border, center)')
-    parser.add_argument('--pad-mode', default='reflect', type=str,
+    parser.add_argument('--pad-mode', default='constant', type=str,
                         choices=['reflect', 'constant', 'edge', 'symmetric'])
     parser.add_argument('--interpolation', default='bilinear', type=str,
                         help='Interpolation is transform')
@@ -125,7 +124,7 @@ def process_target_class(
     all_labels: list[str],
 ):
     # set different thresholds
-    thresholds = (0.99, 0.97, 0.95, 0.90, 0.85, 0.80, 0.70, 0.1)
+    thresholds = (0.98, 0.97, 0.96, 0.95, 0.94, 0.93, 0.92, 0.91, 0.90, 0.88, 0.85, 0.80, 0.70, 0.5, 0.1)
     # create folders
     folder_names = [
         Path(save_dir) / f"{target_class}_split" / Path(f"more_{prob:.2f}") for prob in thresholds
@@ -207,6 +206,7 @@ def inference(
     input_size: tuple,
     crop_pct: float,
     crop_mode: str,
+    pad_mode: str,
     interpolation: str,
     batch_size: int,
     threshold: float,
@@ -220,7 +220,7 @@ def inference(
 ):
 
     setup_default_logging()
-
+    _logger = logging.getLogger("inference")
     if [only_target_class is not None, split_classes, split_classes_on_threshold].count(True) > 1:
         _logger.error(
             "Options <only_target_class>, <split_classes>, <split_classes_on_threshold> "
@@ -241,7 +241,7 @@ def inference(
         interpolation=interpolation,
         crop_pct=crop_pct,
         crop_mode=crop_mode,
-        padding_mode="constant",
+        padding_mode=pad_mode,
     )
     _logger.info(f"Read dataset from {data_dir}: {len(dataset)} samples")
 
@@ -252,7 +252,7 @@ def inference(
     # set device and create model
     device = torch.device(device)  # type: ignore
     model = create_model(
-        model_name, pretrained=True, num_classes=num_classes, checkpoint_path=checkpoint
+        model_name, pretrained=False, num_classes=num_classes, checkpoint_path=checkpoint
     ).to(device)
     model.eval()
     n_params = sum([m.numel() for m in model.parameters()])
