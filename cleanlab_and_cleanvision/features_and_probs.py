@@ -10,16 +10,19 @@ from typing import Sequence, Iterator
 
 from tqdm import tqdm
 import numpy as np
+import pandas as pd
 
 import torch
 import torch.nn.functional as func
 from torch.utils.data import DataLoader, Sampler
 
-from timm.data import create_dataset
+from timm.data import create_dataset, ImageDataset
 from timm.data.transforms_factory import create_transform
 from timm.data.transforms import InferenceCropMode, PaddingMode
-from timm.models import create_model
+from timm.models import create_model, ConvNeXt
 from timm.utils import setup_default_logging
+
+from timm_model import TimmModel, TimmNet
 
 from utils import read_filenames_from_file
 
@@ -67,9 +70,19 @@ def compute_features(model, device, dataloader):
         np.ndarray with shape (n_samples, n_features)
     """
     model = model.to(device)
-    # FIXME: if isinstance(model, ...):
-    model.head.fc = torch.nn.Identity()
     model.eval()
+
+    if isinstance(model, TimmNet):
+        model.head.fc = torch.nn.Identity()
+        model.head.softmax = torch.nn.Identity()
+    elif isinstance(model, TimmModel):
+        model.model.head.fc = torch.nn.Identity()
+        model.softmax = torch.nn.Identity()
+    elif isinstance(model, ConvNeXt):
+        model.head.fc = torch.nn.Identity()
+    else:
+        print("Unknown model type")
+        raise ValueError
 
     all_features = []
     with torch.no_grad():
@@ -92,6 +105,16 @@ def compute_probabilities(model, device, dataloader):
     """
     model = model.to(device)
     model.eval()
+
+    if isinstance(model, TimmNet):
+        model.model.head.softmax = torch.nn.Identity()
+    elif isinstance(model, TimmModel):
+        model.softmax = torch.nn.Identity()
+    elif isinstance(model, ConvNeXt):
+        pass
+    else:
+        print("Unknown model type")
+        raise ValueError
 
     all_probs = []
     with torch.no_grad():
@@ -170,6 +193,14 @@ def features_and_probabilities(
     if file_with_samples_filenames is not None:
         sampler_idx = get_indices_for_sampler(dataset, file_with_samples_filenames)
         sampler = SubsetSequentialSampler(sampler_idx)
+    else: # save all_filenames.txt with all filenames
+        assert isinstance(dataset, ImageDataset)
+        all_files_lst = [[i, dataset.filename(i, absolute=True), dataset.filename(i, basename=True)] for i in range(len(dataset))]
+
+        pd.DataFrame(all_files_lst, columns=['ds_index', 'filepath', 'filename']).to_csv(
+            Path(save_dir) / "all_filenames.txt", sep='\t', index=False, header=True
+        )
+
     loader = DataLoader(
         dataset, batch_size=batch_size, sampler=sampler, drop_last=False, shuffle=False
     )
@@ -190,11 +221,11 @@ def features_and_probabilities(
             model_name, pretrained=True, num_classes=num_classes, checkpoint_path=checkpoint
         )
         features = compute_features(model, device, loader)
-        np.save(save_dir / "features", features)
+        np.save(save_dir / "features.npy", features)
 
     if save_probs:
         model = create_model(
             model_name, pretrained=True, num_classes=num_classes, checkpoint_path=checkpoint
         )
         probs = compute_probabilities(model, device, loader)
-        np.save(save_dir / "probabilities", probs)
+        np.save(save_dir / "probs.npy", probs)
