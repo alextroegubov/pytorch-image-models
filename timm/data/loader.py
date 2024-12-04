@@ -228,7 +228,11 @@ def create_loader(
         worker_seeding: str = 'all',
         tf_preprocessing: bool = False,
         resize_longest: int = 0,
-        padding_mode: PaddingMode = PaddingMode.CONSTANT
+        padding_mode: PaddingMode = PaddingMode.CONSTANT,
+        random_affine_aug: bool = True,
+        rotation_degrees: int = 15,
+        shifts: float = 0.1,
+        shear_degrees: int = 10,
 ):
     """
 
@@ -308,7 +312,11 @@ def create_loader(
         use_prefetcher=use_prefetcher,
         separate=num_aug_splits > 0,
         resize_longest=resize_longest,
-        padding_mode=padding_mode
+        padding_mode=padding_mode,
+        random_affine_aug=random_affine_aug,
+        rotation_degrees=rotation_degrees,
+        shifts=shifts,
+        shear_degrees=shear_degrees,
     )
 
     if isinstance(dataset, IterableImageDataset):

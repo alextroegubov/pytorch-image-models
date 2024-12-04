@@ -86,7 +86,11 @@ def transforms_imagenet_train(
         normalize: bool = True,
         separate: bool = False,
         resize_longest: int = 0,
-        padding_mode: PaddingMode = PaddingMode.REFLECT
+        padding_mode: PaddingMode = PaddingMode.REFLECT,
+        random_affine_aug: bool = True,
+        rotation_degrees: int = 15,
+        shifts: float = 0.1,
+        shear_degrees: int = 10,
 ):
     """ ImageNet-oriented image transforms for training.
 
@@ -114,6 +118,11 @@ def transforms_imagenet_train(
         use_prefetcher: Prefetcher enabled. Do not convert image to tensor or normalize.
         normalize: Normalize tensor output w/ provided mean/std (if prefetcher not used).
         separate: Output transforms in 3-stage tuple.
+
+        random_affine_aug: appy random affine augmentation.
+        rotation_degrees: random rotation from [-x, x] degrees.
+        shifts: vertical and horizontal shifts in [-x*h, x*h] and [-x*w, x*w]
+        shear_degrees: shear augmentation, both in OX and OY directions, [-x, x] degrees
 
     Returns:
         If separate==True, the transforms are returned as a tuple of 3 separate transforms
@@ -145,7 +154,7 @@ def transforms_imagenet_train(
             RandomCropOrPad(img_size, padding_mode=padding_mode)
         ]
     elif train_crop_mode == TrainCropMode.KEEP_SCALE_AND_RATIO_PAD:
-        scale = tuple(scale or (0.8, 1.00))
+        scale = tuple(scale or (0.8, 1.20))
         ratio = tuple(ratio or (0.9, 1/.9))
         primary_tfl = [
             ResizeIfLargerKeepRatio(
@@ -219,6 +228,15 @@ def transforms_imagenet_train(
             ]
         else:
             secondary_tfl += [transforms.ColorJitter(*color_jitter)]
+
+    if random_affine_aug:
+        secondary_tfl += [transforms.RandomAffine(
+            degrees=rotation_degrees, # rotation
+            translate=(shifts, shifts), # horizontal and vertical shifts
+            scale=None, # keep previous scale
+            shear=(-shear_degrees, shear_degrees, -shear_degrees, shear_degrees),
+            fill=0
+        )]
 
     if grayscale_prob:
         secondary_tfl += [transforms.RandomGrayscale(p=grayscale_prob)]
@@ -385,13 +403,17 @@ def create_transform(
         re_num_splits: int = 0,
         crop_pct: Optional[float] = None,
         crop_mode: InferenceCropMode = InferenceCropMode.CENTER,
-        padding_mode: PaddingMode = PaddingMode.CONSTANT,
         crop_border_pixels: Optional[int] = None,
         tf_preprocessing: bool = False,
         use_prefetcher: bool = False,
         normalize: bool = True,
         separate: bool = False,
-        resize_longest: int = 0
+        resize_longest: int = 0,
+        padding_mode: PaddingMode = PaddingMode.CONSTANT,
+        random_affine_aug: bool = True,
+        rotation_degrees: int = 15,
+        shifts: float = 0.1,
+        shear_degrees: int = 10, 
 ):
     """
 
@@ -476,7 +498,11 @@ def create_transform(
                 normalize=normalize,
                 separate=separate,
                 resize_longest=resize_longest,
-                padding_mode=padding_mode
+                padding_mode=padding_mode,
+                random_affine_aug=random_affine_aug,
+                rotation_degrees=rotation_degrees,
+                shifts=shifts,
+                shear_degrees=shear_degrees
             )
         else:
             assert not separate, "Separate transforms not supported for validation preprocessing"
