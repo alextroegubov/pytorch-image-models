@@ -58,6 +58,7 @@ except ImportError:
 import wandb
 has_wandb = True
 #os.environ['WANDB_MODE'] = 'offline'
+os.environ['WANDB_MODE'] = 'online'
 
 
 
@@ -297,6 +298,14 @@ group.add_argument('--grayscale-prob', type=float, default=None, metavar='PCT',
                    help='Probability of applying random grayscale conversion.')
 group.add_argument('--gaussian-blur-prob', type=float, default=None, metavar='PCT',
                    help='Probability of applying gaussian blur.')
+group.add_argument('--random-affine-aug', type=bool, default=True,
+                   help='Apply random affine augmentation')
+group.add_argument('--rotation-degrees', type=int, default=15,
+                   help='Random rotation in [-x, +x]')
+group.add_argument('--shifts', type=float, default=0.15,
+                   help='Random horizontal and vertical shift in [-x*h, x*h] and [-x*w, x*w]')
+group.add_argument('--shear_degrees', type=int, default=10,
+                   help='Random shear in OX and OY in [-x, x]')
 group.add_argument('--aa', type=str, default=None, metavar='NAME',
                    help='Use AutoAugment policy. "v0" or "original". (default: None)'),
 group.add_argument('--aug-repeats', type=float, default=0,
@@ -762,7 +771,11 @@ def main():
         use_multi_epochs_loader=args.use_multi_epochs_loader,
         worker_seeding=args.worker_seeding,
         resize_longest=args.train_resize_longest,
-        padding_mode=PaddingMode[args.train_padding_mode.upper()]
+        padding_mode=PaddingMode[args.train_padding_mode.upper()],
+        random_affine_aug=args.random_affine_aug,
+        rotation_degrees=args.rotation_degrees,
+        shifts=args.shifts,
+        shear_degrees=args.shear_degrees, 
     )
 
     loader_eval = None
