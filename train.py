@@ -131,7 +131,7 @@ group.add_argument('--img-size', type=int, default=None, metavar='N',
                    help='Image size (default: None => model default)')
 group.add_argument('--in-chans', type=int, default=None, metavar='N',
                    help='Image input channels (default: None => 3)')
-group.add_argument('--input-size', default=None, nargs=3, type=int,
+group.add_argument('--input_size', default=None, nargs=3, type=int,
                    metavar='N N N',
                    help='Input all image dimensions (d h w, e.g. --input-size 3 224 224), uses model default if empty')
 group.add_argument('--crop-pct', default=None, type=float,
@@ -147,7 +147,7 @@ group.add_argument('--interpolation', default='', type=str, metavar='NAME',
                    help='Image resize interpolation type (overrides model)')
 group.add_argument('--use-weighted-sampler', action='store_true', default=False,
                    help='Use weigted sampler during train')
-group.add_argument('-b', '--batch-size', type=int, default=128, metavar='N',
+group.add_argument('-b', '--batch_size', type=int, default=128, metavar='N',
                    help='Input batch size for training (default: 128)')
 group.add_argument('-vb', '--validation-batch-size', type=int, default=None, metavar='N',
                    help='Validation batch size override (default: None)')
